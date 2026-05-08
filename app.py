@@ -130,7 +130,7 @@ st.markdown("""
     }
 
     /* Dataframe */
-    .stDataFrame {
+    .stDataeditor {
         border-radius: 12px;
         overflow: hidden;
     }
@@ -178,14 +178,26 @@ EXPENSE_CATEGORIES = [
     "Other"
 ]
 
-COLUMNS = ["ID", "Date", "Person", "Category", "Amount", "Note"]
+TRANSACTION_TYPES = ["Expense", "Income"]
+ACCOUNT_NAMES = ["Cash", "Bank", "Credit Card", "Accounts Payable", "Accounts Receivable", "Capital"]
+COLUMNS = ["ID", "Date", "Person", "Account", "Type", "Category", "Amount", "Note"]
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
 def load_data():
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE)
-        if df.empty or list(df.columns) != COLUMNS:
+        if df.empty:
             df = pd.DataFrame(columns=COLUMNS)
+        else:
+            for col in COLUMNS:
+                if col not in df.columns:
+                    if col == "Account":
+                        df[col] = "Cash"
+                    elif col == "Type":
+                        df[col] = "Expense"
+                    else:
+                        df[col] = "" if col in ["Person", "Category", "Note"] else 0
+            df = df[COLUMNS]
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0)
         return df
@@ -216,11 +228,11 @@ df = load_data()
 
 # ─── Sidebar Navigation ───────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### 💰 Expense Portal")
+    st.markdown("### � Accounting Portal")
     st.markdown("---")
     nav = st.radio(
         "Navigation",
-        ["📊 Dashboard", "➕ Add Expense", "📋 View Records", "📅 Monthly Summary", "👤 Add Person"],
+        ["📊 Dashboard", "➕ Add Transaction", "📋 Ledger", "📅 Accounting Summary", "👤 Add Person"],
         label_visibility="collapsed"
     )
     st.markdown("---")
@@ -228,20 +240,21 @@ with st.sidebar:
     # Quick stats
     if not df.empty:
         st.markdown("**Quick Stats**")
-        total = df["Amount"].sum()
-        st.markdown(f"🔢 Total Entries: **{len(df)}**")
-        st.markdown(f"💵 Total Amount: **{format_inr(total)}**")
+        signed_total = (df["Amount"] * df["Type"].map({"Expense": -1, "Income": 1}).fillna(1)).sum()
+        st.markdown(f"🔢 Total Transactions: **{len(df)}**")
+        st.markdown(f"💵 Net Amount: **{format_inr(signed_total)}**")
         
-        this_month = df[df["Date"].dt.month == datetime.now().month]
-        st.markdown(f"📆 This Month: **{format_inr(this_month['Amount'].sum())}**")
+        this_month = df[df["Date"].dt.month == datetime.now().month].copy()
+        signed_month = (this_month["Amount"] * this_month["Type"].map({"Expense": -1, "Income": 1}).fillna(1)).sum()
+        st.markdown(f"📆 This Month: **{format_inr(signed_month)}**")
 
 # ─── Load persons from session state ─────────────────────────────────────────
 if "persons" not in st.session_state:
     st.session_state.persons = PERSONS.copy()
 
 # ─── Main Title ───────────────────────────────────────────────────────────────
-st.markdown('<div class="main-title">💰 EXPENSE TRACKER PORTAL</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Suhail • Mayur • Rahul — Business Expense Management</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">💼 ACCOUNTING PORTAL</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Suhail • Mayur • Rahul — Business Accounting Software</div>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -251,13 +264,14 @@ if nav == "📊 Dashboard":
     df = load_data()
 
     if df.empty:
-        st.info("📭 कोणतीही entries नाहीत. 'Add Expense' वर जाऊन पहिली entry add करा!")
+        st.info("📭 कोणतीही entries नाहीत. 'Add Transaction' वर जाऊन पहिली entry add करा!")
     else:
         # Top stats
         col1, col2, col3, col4 = st.columns(4)
-        total_all = df["Amount"].sum()
+        signed_amounts = df["Amount"] * df["Type"].map({"Expense": -1, "Income": 1}).fillna(1)
+        total_all = signed_amounts.sum()
         this_m = df[df["Date"].dt.month == datetime.now().month]
-        total_m = this_m["Amount"].sum()
+        total_m = (this_m["Amount"] * this_m["Type"].map({"Expense": -1, "Income": 1}).fillna(1)).sum()
         total_entries = len(df)
 
         with col1:
@@ -297,34 +311,110 @@ if nav == "📊 Dashboard":
         cat_summary.columns = ["Category", "Total Amount"]
         st.dataframe(cat_summary, use_container_width=True, hide_index=True)
 
-        # Recent entries
-        st.markdown('<div class="section-header">🕐 Recent Entries (Last 10)</div>', unsafe_allow_html=True)
+        # Recent transactions
+        st.markdown('<div class="section-header">🕐 Recent Transactions (Last 10)</div>', unsafe_allow_html=True)
         recent = df.sort_values("Date", ascending=False).head(10).copy()
         recent["Date"] = recent["Date"].dt.strftime("%d %b %Y")
         recent["Amount"] = recent["Amount"].apply(format_inr)
-        st.dataframe(recent[["Date", "Person", "Category", "Amount", "Note"]], use_container_width=True, hide_index=True)
+        st.dataframe(recent[["ID", "Date", "Person", "Account", "Type", "Category", "Amount", "Note"]], use_container_width=True, hide_index=True)
+
+        # Account balances
+        st.markdown('<div class="section-header">🏦 Account Balances</div>', unsafe_allow_html=True)
+        account_summary = df.groupby("Account")["Amount"].sum().reset_index()
+        account_summary["Amount"] = account_summary["Amount"].apply(format_inr)
+        account_summary.columns = ["Account", "Balance"]
+        st.dataframe(account_summary, use_container_width=True, hide_index=True)
+
+        # Recent transaction edit section
+        with st.expander('✏️ Recent Transaction Edit करा', expanded=True):
+            st.info('Recent transactions पैकी एक transaction ID निवडा आणि fields बदला.')
+            recent_ids = recent["ID"].astype(int).tolist()
+            if recent_ids:
+                selected_id = st.selectbox(
+                    "Edit करण्यासाठी Recent Transaction ID निवडा",
+                    recent_ids,
+                    format_func=lambda x: f"ID {x} — {df[df['ID']==x]['Person'].values[0]} | {df[df['ID']==x]['Account'].values[0]} | {df[df['ID']==x]['Type'].values[0]} | ₹{df[df['ID']==x]['Amount'].values[0]:,.2f} | {df[df['ID']==x]['Date'].dt.strftime('%d %b %Y').values[0]}"
+                )
+                selected_entry = df[df["ID"] == selected_id].iloc[0]
+                with st.form("recent_entry_edit_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        edit_person = st.selectbox(
+                            "👤 Person",
+                            st.session_state.persons,
+                            index=st.session_state.persons.index(selected_entry["Person"]) if selected_entry["Person"] in st.session_state.persons else 0
+                        )
+                        edit_account = st.selectbox(
+                            "🏦 Account",
+                            ACCOUNT_NAMES,
+                            index=ACCOUNT_NAMES.index(selected_entry["Account"]) if selected_entry["Account"] in ACCOUNT_NAMES else 0
+                        )
+                        edit_type = st.selectbox(
+                            "📌 Type",
+                            TRANSACTION_TYPES,
+                            index=TRANSACTION_TYPES.index(selected_entry["Type"]) if selected_entry["Type"] in TRANSACTION_TYPES else 0
+                        )
+                        edit_date = st.date_input("📅 Date", value=selected_entry["Date"].date())
+                        edit_category = st.selectbox(
+                            "🏷️ Category",
+                            EXPENSE_CATEGORIES,
+                            index=EXPENSE_CATEGORIES.index(selected_entry["Category"]) if selected_entry["Category"] in EXPENSE_CATEGORIES else 0
+                        )
+                    with col2:
+                        edit_amount = st.number_input(
+                            "💵 Amount ₹",
+                            min_value=0.0,
+                            step=100.0,
+                            format="%.2f",
+                            value=float(selected_entry["Amount"])
+                        )
+                        edit_note = st.text_area("📝 Note", value=selected_entry["Note"], height=120)
+
+                    edit_submitted = st.form_submit_button("✅ Save Recent Transaction Changes", use_container_width=True)
+                    if edit_submitted:
+                        if edit_amount <= 0:
+                            st.error("⚠️ Amount 0 पेक्षा जास्त असणे आवश्यक आहे!")
+                        else:
+                            df_edit = load_data()
+                            idx = df_edit.index[df_edit["ID"] == selected_id]
+                            if not idx.empty:
+                                idx = idx[0]
+                                df_edit.at[idx, "Person"] = edit_person
+                                df_edit.at[idx, "Account"] = edit_account
+                                df_edit.at[idx, "Type"] = edit_type
+                                df_edit.at[idx, "Date"] = pd.Timestamp(edit_date)
+                                df_edit.at[idx, "Category"] = edit_category
+                                df_edit.at[idx, "Amount"] = edit_amount
+                                df_edit.at[idx, "Note"] = edit_note.strip()
+                                save_data(df_edit)
+                                st.success(f"✅ Recent transaction ID {selected_id} updated successfully!")
+                                st.rerun()
+            else:
+                st.info("Recent transactions उपलब्ध नाहीत.")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# ADD EXPENSE
+# ADD TRANSACTION
 # ════════════════════════════════════════════════════════════════════════════════
-elif nav == "➕ Add Expense":
-    st.markdown('<div class="section-header">➕ नवीन Expense Add करा</div>', unsafe_allow_html=True)
+elif nav == "➕ Add Transaction":
+    st.markdown('<div class="section-header">➕ नवीन Transaction Add करा</div>', unsafe_allow_html=True)
 
     with st.form("add_expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
 
         with col1:
             person = st.selectbox("👤 व्यक्तीचे नाव (Person)", st.session_state.persons)
-            expense_date = st.date_input("📅 तारीख (Date)", value=date.today())
-            category = st.selectbox("🏷️ Expense Category", EXPENSE_CATEGORIES)
+            transaction_date = st.date_input("📅 तारीख (Date)", value=date.today())
+            transaction_type = st.selectbox("📌 Transaction Type", TRANSACTION_TYPES)
+            account = st.selectbox("🏦 Account", ACCOUNT_NAMES)
 
         with col2:
+            category = st.selectbox("🏷️ Category", EXPENSE_CATEGORIES)
             amount = st.number_input("💵 रक्कम (Amount ₹)", min_value=0.0, step=100.0, format="%.2f")
             note = st.text_area("📝 नोट (Note)", placeholder="Optional - additional details...", height=120)
 
         st.markdown("")
-        submitted = st.form_submit_button("✅ Expense Save करा", use_container_width=True)
+        submitted = st.form_submit_button("✅ Transaction Save करा", use_container_width=True)
 
         if submitted:
             if amount <= 0:
@@ -333,40 +423,46 @@ elif nav == "➕ Add Expense":
                 df = load_data()
                 new_row = pd.DataFrame([{
                     "ID": next_id(df),
-                    "Date": pd.Timestamp(expense_date),
+                    "Date": pd.Timestamp(transaction_date),
                     "Person": person,
+                    "Account": account,
+                    "Type": transaction_type,
                     "Category": category,
                     "Amount": amount,
                     "Note": note.strip() if note else ""
                 }])
                 df = pd.concat([df, new_row], ignore_index=True)
                 save_data(df)
-                st.success(f"✅ **{person}** चा ₹{amount:,.2f} चा **{category}** expense successfully saved!")
+                st.success(f"✅ **{person}** चा ₹{amount:,.2f} चा **{transaction_type}** transaction successfully saved!")
                 st.balloons()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# VIEW RECORDS
+# LEDGER
 # ════════════════════════════════════════════════════════════════════════════════
-elif nav == "📋 View Records":
-    st.markdown('<div class="section-header">📋 सर्व Expense Records</div>', unsafe_allow_html=True)
+elif nav == "📋 Ledger":
+    st.markdown('<div class="section-header">📋 Ledger Transactions</div>', unsafe_allow_html=True)
     df = load_data()
 
     if df.empty:
         st.info("📭 कोणतेही records नाहीत.")
     else:
         # Filters
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             filter_person = st.multiselect("👤 Person Filter", ["All"] + st.session_state.persons, default=["All"])
         with col2:
             filter_cat = st.multiselect("🏷️ Category Filter", ["All"] + EXPENSE_CATEGORIES, default=["All"])
         with col3:
-            filter_month = st.selectbox("📅 Month Filter", ["All"] + [
-                f"{m:02d}/{y}" for y in sorted(df["Date"].dt.year.unique(), reverse=True)
-                for m in range(1, 13)
-                if not df[(df["Date"].dt.month == m) & (df["Date"].dt.year == y)].empty
-            ])
+            filter_account = st.multiselect("🏦 Account Filter", ["All"] + ACCOUNT_NAMES, default=["All"])
+        with col4:
+            filter_type = st.multiselect("📌 Type Filter", ["All"] + TRANSACTION_TYPES, default=["All"])
+
+        filter_month = st.selectbox("📅 Month Filter", ["All"] + [
+            f"{m:02d}/{y}" for y in sorted(df["Date"].dt.year.unique(), reverse=True)
+            for m in range(1, 13)
+            if not df[(df["Date"].dt.month == m) & (df["Date"].dt.year == y)].empty
+        ])
 
         # Apply filters
         filtered = df.copy()
@@ -374,6 +470,10 @@ elif nav == "📋 View Records":
             filtered = filtered[filtered["Person"].isin(filter_person)]
         if "All" not in filter_cat and filter_cat:
             filtered = filtered[filtered["Category"].isin(filter_cat)]
+        if "All" not in filter_account and filter_account:
+            filtered = filtered[filtered["Account"].isin(filter_account)]
+        if "All" not in filter_type and filter_type:
+            filtered = filtered[filtered["Type"].isin(filter_type)]
         if filter_month != "All":
             m, y = int(filter_month.split("/")[0]), int(filter_month.split("/")[1])
             filtered = filtered[(filtered["Date"].dt.month == m) & (filtered["Date"].dt.year == y)]
@@ -381,8 +481,78 @@ elif nav == "📋 View Records":
         filtered = filtered.sort_values("Date", ascending=False)
 
         # Summary of filtered
-        st.markdown(f"**{len(filtered)} entries found — Total: {format_inr(filtered['Amount'].sum())}**")
+        signed_filtered_total = (filtered["Amount"] * filtered["Type"].map({"Expense": -1, "Income": 1}).fillna(1)).sum()
+        st.markdown(f"**{len(filtered)} entries found — Net Total: {format_inr(signed_filtered_total)}**")
         st.markdown("")
+
+        # Edit section
+        st.markdown("---")
+        with st.expander('✏️ Entry Edit करा', expanded=True):
+            st.info("खालील ID निवडा आणि नंतर त्या entry चे तपशील edit करा.")
+
+            if not filtered.empty:
+                id_options = filtered["ID"].astype(int).tolist()
+                edit_id = st.selectbox(
+                    "Edit करण्यासाठी Entry ID निवडा",
+                    id_options,
+                    format_func=lambda x: f"ID {x} — {filtered[filtered['ID']==x]['Person'].values[0]} | {filtered[filtered['ID']==x]['Category'].values[0]} | ₹{filtered[filtered['ID']==x]['Amount'].values[0]:,.2f} | {filtered[filtered['ID']==x]['Date'].dt.strftime('%d %b %Y').values[0]}"
+                )
+
+                edit_entry = filtered[filtered["ID"] == edit_id].iloc[0]
+                with st.form("edit_expense_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        edit_person = st.selectbox(
+                            "👤 Person",
+                            st.session_state.persons,
+                            index=st.session_state.persons.index(edit_entry["Person"]) if edit_entry["Person"] in st.session_state.persons else 0
+                        )
+                        edit_account = st.selectbox(
+                            "🏦 Account",
+                            ACCOUNT_NAMES,
+                            index=ACCOUNT_NAMES.index(edit_entry["Account"]) if edit_entry["Account"] in ACCOUNT_NAMES else 0
+                        )
+                        edit_type = st.selectbox(
+                            "📌 Type",
+                            TRANSACTION_TYPES,
+                            index=TRANSACTION_TYPES.index(edit_entry["Type"]) if edit_entry["Type"] in TRANSACTION_TYPES else 0
+                        )
+                        edit_date = st.date_input("📅 Date", value=edit_entry["Date"].date())
+                        edit_category = st.selectbox(
+                            "🏷️ Category",
+                            EXPENSE_CATEGORIES,
+                            index=EXPENSE_CATEGORIES.index(edit_entry["Category"]) if edit_entry["Category"] in EXPENSE_CATEGORIES else 0
+                        )
+
+                    with col2:
+                        edit_amount = st.number_input(
+                            "💵 Amount ₹",
+                            min_value=0.0,
+                            step=100.0,
+                            format="%.2f",
+                            value=float(edit_entry["Amount"])
+                        )
+                        edit_note = st.text_area("📝 Note", value=edit_entry["Note"], height=120)
+
+                    edit_submitted = st.form_submit_button("✅ Save Changes", use_container_width=True)
+                    if edit_submitted:
+                        if edit_amount <= 0:
+                            st.error("⚠️ Amount 0 पेक्षा जास्त असणे आवश्यक आहे!")
+                        else:
+                            df = load_data()
+                            idx = df.index[df["ID"] == edit_id]
+                            if not idx.empty:
+                                idx = idx[0]
+                                df.at[idx, "Person"] = edit_person
+                                df.at[idx, "Account"] = edit_account
+                                df.at[idx, "Type"] = edit_type
+                                df.at[idx, "Date"] = pd.Timestamp(edit_date)
+                                df.at[idx, "Category"] = edit_category
+                                df.at[idx, "Amount"] = edit_amount
+                                df.at[idx, "Note"] = edit_note.strip()
+                                save_data(df)
+                                st.success(f"✅ Entry ID {edit_id} successfully updated!")
+                                st.rerun()
 
         # Display with delete option
         display_df = filtered.copy()
@@ -390,7 +560,7 @@ elif nav == "📋 View Records":
         display_df["Amount_Display"] = display_df["Amount"].apply(lambda x: f"₹{x:,.2f}")
 
         # Show table
-        show_cols = ["ID", "Date_Display", "Person", "Category", "Amount_Display", "Note"]
+        show_cols = ["ID", "Date_Display", "Person", "Account", "Type", "Category", "Amount_Display", "Note"]
         renamed = display_df[show_cols].rename(columns={
             "Date_Display": "Date",
             "Amount_Display": "Amount"
@@ -406,7 +576,7 @@ elif nav == "📋 View Records":
             del_id = st.selectbox(
                 "Delete करायची Entry ID निवडा",
                 id_options,
-                format_func=lambda x: f"ID {x} — {filtered[filtered['ID']==x]['Person'].values[0]} | {filtered[filtered['ID']==x]['Category'].values[0]} | ₹{filtered[filtered['ID']==x]['Amount'].values[0]:,.2f} | {filtered[filtered['ID']==x]['Date'].dt.strftime('%d %b %Y').values[0]}"
+                format_func=lambda x: f"ID {x} — {filtered[filtered['ID']==x]['Person'].values[0]} | {filtered[filtered['ID']==x]['Account'].values[0]} | {filtered[filtered['ID']==x]['Type'].values[0]} | {filtered[filtered['ID']==x]['Category'].values[0]} | ₹{filtered[filtered['ID']==x]['Amount'].values[0]:,.2f} | {filtered[filtered['ID']==x]['Date'].dt.strftime('%d %b %Y').values[0]}"
             )
 
             col_del, col_cancel = st.columns([1, 3])
@@ -420,10 +590,10 @@ elif nav == "📋 View Records":
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# MONTHLY SUMMARY + EXCEL DOWNLOAD
+# ACCOUNTING SUMMARY + EXCEL DOWNLOAD
 # ════════════════════════════════════════════════════════════════════════════════
-elif nav == "📅 Monthly Summary":
-    st.markdown('<div class="section-header">📅 Month-wise Summary & Excel Download</div>', unsafe_allow_html=True)
+elif nav == "📅 Accounting Summary":
+    st.markdown('<div class="section-header">📅 Accounting Summary & Excel Download</div>', unsafe_allow_html=True)
     df = load_data()
 
     if df.empty:
@@ -443,8 +613,9 @@ elif nav == "📅 Monthly Summary":
             filtered = df[df["Month_Str"] == selected_month].copy()
             title_str = selected_month
 
+        signed_summary_total = (filtered["Amount"] * filtered["Type"].map({"Expense": -1, "Income": 1}).fillna(1)).sum()
         st.markdown(f"### 📊 Summary — {title_str}")
-        st.markdown(f"**Total: {format_inr(filtered['Amount'].sum())} | {len(filtered)} Entries**")
+        st.markdown(f"**Net Total: {format_inr(signed_summary_total)} | {len(filtered)} Transactions**")
         st.markdown("")
 
         # Person-wise for selected month
@@ -463,6 +634,21 @@ elif nav == "📅 Monthly Summary":
             cat_summary["Amount"] = cat_summary["Amount"].apply(format_inr)
             cat_summary.columns = ["Category", "Total Amount"]
             st.dataframe(cat_summary, use_container_width=True, hide_index=True)
+
+        col3, col4 = st.columns(2)
+        with col3:
+            st.markdown("**Transaction Type Breakdown**")
+            type_summary = filtered.groupby("Type")["Amount"].sum().reset_index()
+            type_summary["Amount"] = type_summary["Amount"].apply(format_inr)
+            type_summary.columns = ["Type", "Total Amount"]
+            st.dataframe(type_summary, use_container_width=True, hide_index=True)
+
+        with col4:
+            st.markdown("**Account-wise Breakdown**")
+            acct_summary = filtered.groupby("Account")["Amount"].sum().reset_index()
+            acct_summary["Amount"] = acct_summary["Amount"].apply(format_inr)
+            acct_summary.columns = ["Account", "Total Amount"]
+            st.dataframe(acct_summary, use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
